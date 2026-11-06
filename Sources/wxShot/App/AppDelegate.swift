@@ -19,6 +19,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.terminate(nil)
             return
         }
+        #if DEBUG
+        // 截图验收不注册全局快捷键、不检查更新，也不上报遥测。
+        if DebugSnapshots.runIfRequested() { return }
+        #endif
         ImageEditLauncher.clearTempDir()
         #if !MAS
         UpdateChecker.shared.checkAtLaunchIfDue()
@@ -48,7 +52,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         applyHotkeyState()
 
         #if DEBUG
-        if DebugSnapshots.runIfRequested() { return }
         if ProcessInfo.processInfo.environment["WXSHOT_DEBUG_CAPTURE"] == "1" {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.handleTrigger() }
             return

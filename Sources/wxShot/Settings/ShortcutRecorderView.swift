@@ -5,7 +5,7 @@ import Carbon
 /// While recording, the global hotkey is suspended so the key press is not swallowed.
 final class ShortcutRecorderView: NSStackView {
     private let field = NSTextField(labelWithString: "")
-    private let fieldBox = NSView()
+    private let fieldBox = AdaptiveChromeSurfaceView(style: .card, cornerRadius: 6)
     private let setButton = NSButton()
     private let restoreButton = NSButton()
     private var monitor: Any?
@@ -19,9 +19,6 @@ final class ShortcutRecorderView: NSStackView {
         field.font = .monospacedSystemFont(ofSize: 15, weight: .medium)
         field.alignment = .center
         field.translatesAutoresizingMaskIntoConstraints = false
-        fieldBox.wantsLayer = true
-        fieldBox.layer?.cornerRadius = 6
-        fieldBox.layer?.backgroundColor = NSColor.quaternaryLabelColor.cgColor
         fieldBox.translatesAutoresizingMaskIntoConstraints = false
         fieldBox.addSubview(field)
         NSLayoutConstraint.activate([

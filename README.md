@@ -22,6 +22,12 @@ The WeChat-style screenshot for macOS that works when WeChat is not signed in.</
   <a href="https://ntfstool.com/wxshot/changelog/">Changelog</a>
 </p>
 
+## 个人维护版
+
+本 fork 增加默认跟随 macOS 系统外观的深浅色主题。截图工具栏使用 AppKit 原生浮层材质、系统图标颜色和强调色；工具栏、快捷键输入框与 OCR 预览底色随系统切换，截图内容与标注颜色保持原样。
+
+使用本仓库源码构建个人版：`scripts/build.sh`，产物为 `dist/wxShot.app`，采用本机 ad-hoc 签名。下方下载链接和 Apple 公证说明属于上游发行版。
+
 ## Highlights
 
 - **Only 2.8 MB**, signed and **notarized by Apple**. Apple silicon and Intel.

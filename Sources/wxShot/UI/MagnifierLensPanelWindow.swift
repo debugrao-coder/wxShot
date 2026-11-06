@@ -257,7 +257,7 @@ enum MagnifierLensPanelSampler {
     /// the view that needs to draw so this works regardless of AppKit quirks.
     static func backgroundColor(forAppearance appearance: NSAppearance) -> NSColor {
         if Defaults.magnifierLensPanelFollowSystemAppearance {
-            let isDark = appearance.bestMatch(from: [.darkAqua, .vibrantDark]) == .darkAqua
+            let isDark = AdaptiveChrome.isDark(appearance)
             return isDark ? darkBackgroundColor() : lightBackgroundColor()
         }
         return darkBackgroundColor()
@@ -313,6 +313,11 @@ final class MagnifierLensPanelView: NSView {
             return max(widest, width)
         }.rounded(.up)
     }()
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
 
     func clear() {
         currentSample = nil

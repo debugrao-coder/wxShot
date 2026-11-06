@@ -14,6 +14,28 @@ final class PanelTextView: NSTextView {
     }
 }
 
+/// 仅更新预览控件的底色和边框，截图像素保持原样。
+private final class AppearanceAwarePreview: NSImageView {
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        applyAppearance()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyAppearance()
+    }
+
+    private func applyAppearance() {
+        layer?.backgroundColor = AdaptiveChrome.resolvedCGColor(
+            AdaptiveChrome.cardBackground, for: effectiveAppearance
+        )
+        layer?.borderColor = AdaptiveChrome.resolvedCGColor(
+            AdaptiveChrome.border, for: effectiveAppearance
+        )
+    }
+}
+
 /// "Extract text" result window: recognizes text with Apple Vision (fully offline) and lets the user copy it.
 final class TextRecognitionPanel: NSPanel {
     private static var current: TextRecognitionPanel?
@@ -133,15 +155,13 @@ final class TextRecognitionPanel: NSPanel {
         copyButton.translatesAutoresizingMaskIntoConstraints = false
 
         // Left: the screenshot, so the text can be compared against it; right: the recognized text.
-        let preview = NSImageView()
+        let preview = AppearanceAwarePreview()
         preview.image = screenshot
         preview.imageScaling = .scaleProportionallyUpOrDown
         preview.imageAlignment = .alignCenter
         preview.wantsLayer = true
         preview.layer?.cornerRadius = 8
         preview.layer?.borderWidth = 1
-        preview.layer?.borderColor = NSColor.separatorColor.cgColor
-        preview.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.04).cgColor
         preview.translatesAutoresizingMaskIntoConstraints = false
 
         let divider = NSBox()

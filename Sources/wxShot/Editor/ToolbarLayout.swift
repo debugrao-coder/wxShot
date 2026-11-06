@@ -205,18 +205,17 @@ extension ToolbarItemID {
     var selectedColor: NSColor {
         switch kind {
         case .toggleTool, .toggleAction:
-            return toolbarConfirmGreen
+            return .controlAccentColor
         case .momentary, .dragHandle:
             return normalColor
         }
     }
 }
 
-/// Red used for the cancel button's icon. Mirrors the literal previously
-/// inlined in `ToolbarView.setupButtons()`.
-let toolbarDangerRed = NSColor(srgbRed: 0.89, green: 0.35, blue: 0.32, alpha: 1)
-let toolbarConfirmGreen = NSColor(srgbRed: 0.24, green: 0.72, blue: 0.42, alpha: 1)
-let toolbarIconGray = NSColor(srgbRed: 0.353, green: 0.353, blue: 0.353, alpha: 1)
+/// 使用系统语义色，随深浅色外观与辅助功能对比度设置调整。
+let toolbarDangerRed = NSColor.systemRed
+let toolbarConfirmGreen = NSColor.systemGreen
+let toolbarIconGray = NSColor.labelColor
 
 /// User-customizable assignment of every toolbar item to the primary
 /// (horizontal) toolbar, the side (vertical) toolbar, or hidden.

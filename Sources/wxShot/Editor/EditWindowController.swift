@@ -2792,7 +2792,7 @@ final class EditorScrollView: NSScrollView {
 /// A row (horizontal) or column (vertical) of editor buttons built from a
 /// `[ToolbarItemID]`. Both the primary toolbar and the side toolbar are
 /// instances of this class — only `orientation` and the item list differ.
-class ToolbarView: NSView {
+class ToolbarView: NSVisualEffectView {
     enum Orientation { case horizontal, vertical }
 
     /// Button run geometry. `preferredSize` derives the capsule size from
@@ -2854,8 +2854,16 @@ class ToolbarView: NSView {
         self.items = items
         self.orientation = orientation
         super.init(frame: NSRect(origin: .zero, size: .zero))
+        material = .popover
+        blendingMode = .withinWindow
+        state = .active
+        wantsLayer = true
+        layer?.cornerRadius = 10
+        layer?.cornerCurve = .continuous
+        layer?.masksToBounds = true
         setFrameSize(preferredSize)
         setupButtons()
+        setupSeparators()
     }
 
     required init?(coder: NSCoder) {
@@ -2945,22 +2953,25 @@ class ToolbarView: NSView {
         return btn
     }
 
-    override func draw(_ dirtyRect: NSRect) {
-        // Fixed light bar, like WeChat's, regardless of the system appearance.
-        let path = NSBezierPath(roundedRect: bounds, xRadius: 4, yRadius: 4)
-        NSColor(srgbRed: 0.984, green: 0.984, blue: 0.984, alpha: 1).setFill()
-        path.fill()
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+        buttons.values.forEach { $0.needsDisplay = true }
+    }
 
-        NSColor(srgbRed: 0.89, green: 0.89, blue: 0.89, alpha: 1).setFill()
+    private func setupSeparators() {
         let offsets = self.offsets
         for (index, id) in items.enumerated() where index < items.count - 1 && Self.groupEnds.contains(id) {
             let mid = offsets[index] + Self.buttonSize + (Self.buttonSpacing + Self.groupGap) / 2
+            let separator = NSBox()
+            separator.boxType = .separator
             switch orientation {
             case .horizontal:
-                NSRect(x: mid - 0.5, y: 0, width: 1, height: bounds.height).fill()
+                separator.frame = NSRect(x: mid - 0.5, y: 11, width: 1, height: bounds.height - 22)
             case .vertical:
-                NSRect(x: 0, y: bounds.height - mid - 0.5, width: bounds.width, height: 1).fill()
+                separator.frame = NSRect(x: 11, y: bounds.height - mid - 0.5, width: bounds.width - 22, height: 1)
             }
+            addSubview(separator)
         }
     }
 
@@ -3006,6 +3017,11 @@ class ToolButton: NSButton {
 
         contentTintColor = normalColor
         wantsLayer = true
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
     }
 
     required init?(coder: NSCoder) {
@@ -3066,7 +3082,11 @@ class ToolButton: NSButton {
         // those parts on a different backing scale. Draw the full symbol in
         // points and let NSImage rasterize for the current graphics context.
         guard let image else { return }
-        let color = isSelected ? selectedColor : normalColor
+        // 在创建图像绘制闭包前解析颜色，避免使用其他窗口的外观。
+        let color = AdaptiveChrome.resolvedColor(
+            isSelected ? selectedColor : normalColor,
+            for: effectiveAppearance
+        )
         let tinted = NSImage(size: image.size, flipped: false) { rect in
             image.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1)
             color.setFill()
@@ -4312,9 +4332,7 @@ private class MosaicSubToolbar: NSView {
         }
 
         x += 8
-        let separator = NSView(frame: NSRect(x: x, y: midY - 9, width: 1, height: 18))
-        separator.wantsLayer = true
-        separator.layer?.backgroundColor = AdaptiveChrome.separator.cgColor
+        let separator = AdaptiveSeparatorView(frame: NSRect(x: x, y: midY - 9, width: 1, height: 18))
         addSubview(separator)
         x += 10
 
