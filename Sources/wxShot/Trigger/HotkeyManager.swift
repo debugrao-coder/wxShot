@@ -22,6 +22,11 @@ final class HotkeyManager {
 
     private init() {}
 
+    var isScreenshotHotkeyRegistered: Bool { hotKeyRef != nil }
+    var isQuickPinHotkeyRegistered: Bool { quickPinHotKeyRef != nil }
+    var isFullScreenScreenshotHotkeyRegistered: Bool { fullScreenScreenshotHotKeyRef != nil }
+    var isEventHandlerInstalled: Bool { eventHandlerRef != nil }
+
     deinit {
         unregister()
         unregisterQuickPin()
@@ -36,22 +41,19 @@ final class HotkeyManager {
 
     /// Register the saved screenshot hotkey, if any. Caller's `callback` is invoked when fired.
     /// If no hotkey is saved (key code == 0 with no function-key fallback), this no-ops.
-    func register(callback: @escaping (CaptureTriggerContext) -> Void) {
+    @discardableResult
+    func register(callback: @escaping (CaptureTriggerContext) -> Void) -> Bool {
         self.callback = callback
         unregister()
 
-        guard let (keyCode, modifiers) = currentHotkey() else { return }
-
-        installEventHandlerIfNeeded()
-        var ref: EventHotKeyRef?
-        let id = EventHotKeyID(signature: Self.regularHotKeySignature, id: Self.regularHotKeyID)
-        let status = RegisterEventHotKey(
-            keyCode, modifiers, id,
-            GetApplicationEventTarget(), 0, &ref
-        )
-        if status == noErr, let ref = ref {
-            hotKeyRef = ref
-        }
+        guard let (keyCode, modifiers) = currentHotkey() else { return false }
+        guard let ref = registerCarbonHotKey(
+            keyCode: keyCode,
+            modifiers: modifiers,
+            id: Self.regularHotKeyID
+        ) else { return false }
+        hotKeyRef = ref
+        return true
     }
 
     func unregister() {
@@ -62,22 +64,19 @@ final class HotkeyManager {
     }
 
     /// Register the shortcut that selects a screen region and pins it directly.
-    func registerQuickPin(callback: @escaping () -> Void) {
+    @discardableResult
+    func registerQuickPin(callback: @escaping () -> Void) -> Bool {
         quickPinCallback = callback
         unregisterQuickPin()
 
-        guard let (keyCode, modifiers) = currentQuickPinHotkey() else { return }
-
-        installEventHandlerIfNeeded()
-        var ref: EventHotKeyRef?
-        let id = EventHotKeyID(signature: Self.regularHotKeySignature, id: Self.quickPinHotKeyID)
-        let status = RegisterEventHotKey(
-            keyCode, modifiers, id,
-            GetApplicationEventTarget(), 0, &ref
-        )
-        if status == noErr, let ref {
-            quickPinHotKeyRef = ref
-        }
+        guard let (keyCode, modifiers) = currentQuickPinHotkey() else { return false }
+        guard let ref = registerCarbonHotKey(
+            keyCode: keyCode,
+            modifiers: modifiers,
+            id: Self.quickPinHotKeyID
+        ) else { return false }
+        quickPinHotKeyRef = ref
+        return true
     }
 
     func unregisterQuickPin() {
@@ -88,22 +87,19 @@ final class HotkeyManager {
     }
 
     /// Register the saved full-screen screenshot hotkey, if any.
-    func registerFullScreenScreenshot(callback: @escaping () -> Void) {
+    @discardableResult
+    func registerFullScreenScreenshot(callback: @escaping () -> Void) -> Bool {
         self.fullScreenScreenshotCallback = callback
         unregisterFullScreenScreenshot()
 
-        guard let (keyCode, modifiers) = currentFullScreenScreenshotHotkey() else { return }
-
-        installEventHandlerIfNeeded()
-        var ref: EventHotKeyRef?
-        let id = EventHotKeyID(signature: Self.regularHotKeySignature, id: Self.fullScreenScreenshotHotKeyID)
-        let status = RegisterEventHotKey(
-            keyCode, modifiers, id,
-            GetApplicationEventTarget(), 0, &ref
-        )
-        if status == noErr, let ref = ref {
-            fullScreenScreenshotHotKeyRef = ref
-        }
+        guard let (keyCode, modifiers) = currentFullScreenScreenshotHotkey() else { return false }
+        guard let ref = registerCarbonHotKey(
+            keyCode: keyCode,
+            modifiers: modifiers,
+            id: Self.fullScreenScreenshotHotKeyID
+        ) else { return false }
+        fullScreenScreenshotHotKeyRef = ref
+        return true
     }
 
     func unregisterFullScreenScreenshot() {
@@ -111,6 +107,25 @@ final class HotkeyManager {
             UnregisterEventHotKey(ref)
             fullScreenScreenshotHotKeyRef = nil
         }
+    }
+
+    private func registerCarbonHotKey(
+        keyCode: UInt32,
+        modifiers: UInt32,
+        id: UInt32
+    ) -> EventHotKeyRef? {
+        installEventHandlerIfNeeded()
+        var ref: EventHotKeyRef?
+        let hotKeyID = EventHotKeyID(signature: Self.regularHotKeySignature, id: id)
+        let status = RegisterEventHotKey(
+            keyCode, modifiers, hotKeyID,
+            GetApplicationEventTarget(), 0, &ref
+        )
+        guard status == noErr, let ref else {
+            NSLog("wxShot hotkey registration failed: id=%u status=%d", id, status)
+            return nil
+        }
+        return ref
     }
 
     // MARK: - Recording lifecycle
@@ -294,7 +309,8 @@ final class HotkeyManager {
         )
         let selfPtr = Unmanaged.passUnretained(self).toOpaque()
 
-        InstallEventHandler(
+        var handlerRef: EventHandlerRef?
+        let status = InstallEventHandler(
             GetEventDispatcherTarget(),
             { (_, eventRef, userData) -> OSStatus in
                 guard let userData = userData else { return OSStatus(eventNotHandledErr) }
@@ -340,8 +356,14 @@ final class HotkeyManager {
                 }
                 return noErr
             },
-            1, &spec, selfPtr, &eventHandlerRef
+            1, &spec, selfPtr, &handlerRef
         )
+        guard status == noErr, let handlerRef else {
+            NSLog("wxShot hotkey event handler installation failed: status=%d", status)
+            eventHandlerRef = nil
+            return
+        }
+        eventHandlerRef = handlerRef
     }
 
     // MARK: - Keycode helpers

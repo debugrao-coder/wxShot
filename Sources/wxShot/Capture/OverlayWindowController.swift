@@ -115,6 +115,7 @@ class OverlayWindowController {
     private let suspendedDraft: SuspendedEditDraft?
     private let keepsEditorAcrossSpaces: Bool
     private var presentationScheduled = false
+    private var sessionStartedAt: Date?
     /// Bumped whenever a presentation starts or ends so stale asynchronous
     /// snapshot/window-list callbacks cannot mutate a newer overlay session.
     private var presentationGeneration = 0
@@ -209,6 +210,11 @@ class OverlayWindowController {
 
     static func invalidateAndPrewarmPresentationSurfaces() {
         OverlayPanelPool.shared.invalidateAndPrewarm(screens: NSScreen.screens)
+    }
+
+    static func recyclePresentationSurfaces() {
+        OverlayPanelPool.shared.discardPresentationSurfaces()
+        OverlayPanelPool.shared.prewarm(screens: NSScreen.screens)
     }
 
     func screenParametersDidChange() {
@@ -353,10 +359,13 @@ class OverlayWindowController {
     func activate() {
         guard !presentationScheduled else { return }
         presentationScheduled = true
+        sessionStartedAt = Date()
         triggerContext?.mark(.activateRequested)
         ToastWindow.dismiss()
         beginOverlaySession()
     }
+
+    var captureSessionStartedAt: Date? { sessionStartedAt }
 
     var isOverlayPresented: Bool {
         !windows.isEmpty && windows.allSatisfy(\.isVisible)
@@ -384,6 +393,16 @@ class OverlayWindowController {
     var appliedSnapshotCount: Int { screenSnapshots.count }
     var hasActiveEditor: Bool { editController != nil }
     var isCaptureSessionEnded: Bool { sessionEnded }
+
+    func forceCancel() {
+        guard !sessionEnded else { return }
+        triggerContext?.finish(.cancelled)
+        editController?.tearDown()
+        editController = nil
+        tearDown()
+        onComplete(nil)
+        onRequestFocusReturn?()
+    }
 
     private func beginOverlaySession() {
         presentationGeneration += 1
@@ -1170,13 +1189,7 @@ class OverlayWindowController {
 
     func cancel() {
         if editController?.cancelWindowCaptureOutput() == true { return }
-        guard !sessionEnded else { return }
-        triggerContext?.finish(.cancelled)
-        editController?.tearDown()
-        editController = nil
-        tearDown()
-        onComplete(nil)
-        onRequestFocusReturn?()
+        forceCancel()
     }
 
     private func suspendCurrentEditFromMask() {

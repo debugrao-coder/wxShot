@@ -28,4 +28,66 @@ final class LogicTests: XCTestCase {
         let hk = HotkeyManager.defaultHotkey
         XCTAssertEqual(HotkeyManager.modifierString(hk.modifiers) + HotkeyManager.keyString(hk.keyCode), "⌥A")
     }
+
+    func testStaleCaptureSessionRecovery() {
+        let waitingTimeout = CaptureSessionRecovery.waitingTimeout
+        let sessionTimeout = CaptureSessionRecovery.sessionTimeout
+
+        XCTAssertTrue(CaptureSessionRecovery.shouldRecover(
+            sessionEnded: true,
+            isOverlayPresented: true,
+            isWaitingForSnapshot: false,
+            isWaitingForWindowCapture: false,
+            elapsed: 0
+        ))
+        XCTAssertFalse(CaptureSessionRecovery.shouldRecover(
+            sessionEnded: false,
+            isOverlayPresented: false,
+            isWaitingForSnapshot: false,
+            isWaitingForWindowCapture: false,
+            elapsed: waitingTimeout - 1
+        ))
+        XCTAssertTrue(CaptureSessionRecovery.shouldRecover(
+            sessionEnded: false,
+            isOverlayPresented: false,
+            isWaitingForSnapshot: false,
+            isWaitingForWindowCapture: false,
+            elapsed: waitingTimeout + 1
+        ))
+        XCTAssertTrue(CaptureSessionRecovery.shouldRecover(
+            sessionEnded: false,
+            isOverlayPresented: true,
+            isWaitingForSnapshot: true,
+            isWaitingForWindowCapture: false,
+            elapsed: waitingTimeout + 1
+        ))
+        XCTAssertFalse(CaptureSessionRecovery.shouldRecover(
+            sessionEnded: false,
+            isOverlayPresented: true,
+            isWaitingForSnapshot: false,
+            isWaitingForWindowCapture: false,
+            elapsed: sessionTimeout - 1
+        ))
+        XCTAssertTrue(CaptureSessionRecovery.shouldRecover(
+            sessionEnded: false,
+            isOverlayPresented: true,
+            isWaitingForSnapshot: false,
+            isWaitingForWindowCapture: false,
+            elapsed: sessionTimeout + 1
+        ))
+        XCTAssertTrue(CaptureSessionRecovery.shouldRecover(
+            sessionEnded: false,
+            isOverlayPresented: true,
+            isWaitingForSnapshot: false,
+            isWaitingForWindowCapture: false,
+            elapsed: -1
+        ))
+        XCTAssertTrue(CaptureSessionRecovery.shouldRecover(
+            sessionEnded: false,
+            isOverlayPresented: false,
+            isWaitingForSnapshot: true,
+            isWaitingForWindowCapture: false,
+            elapsed: -1
+        ))
+    }
 }

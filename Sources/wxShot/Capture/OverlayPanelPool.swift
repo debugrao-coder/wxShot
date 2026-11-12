@@ -14,7 +14,7 @@ final class OverlayPanelPool {
 
     private var panelsByDisplayID: [CGDirectDisplayID: OverlayPanel] = [:]
     private var warmingPanelsByDisplayID: [CGDirectDisplayID: OverlayPanel] = [:]
-    private var warmupTimeoutsByDisplayID: [CGDirectDisplayID: DispatchWorkItem] = [:]
+    private var warmupTimeoutsByDisplayID: [CGDirectDisplayID: Timer] = [:]
     private var leasedPanels: [ObjectIdentifier: PanelLease] = [:]
     private var leaseCountsByDisplayID: [CGDirectDisplayID: Int] = [:]
 
@@ -54,6 +54,19 @@ final class OverlayPanelPool {
             storePooled(panel, displayID: displayID)
         }
         prewarm(screens: screens)
+    }
+
+    func discardPresentationSurfaces() {
+        assertMainThread()
+        for timeout in warmupTimeoutsByDisplayID.values { timeout.invalidate() }
+        warmupTimeoutsByDisplayID.removeAll()
+        for panel in warmingPanelsByDisplayID.values { dispose(panel) }
+        warmingPanelsByDisplayID.removeAll()
+        for panel in panelsByDisplayID.values { dispose(panel) }
+        panelsByDisplayID.removeAll()
+        for lease in leasedPanels.values { dispose(lease.panel) }
+        leasedPanels.removeAll()
+        leaseCountsByDisplayID.removeAll()
     }
 
     func lease(for screen: NSScreen) -> OverlayPanel {
@@ -141,7 +154,7 @@ final class OverlayPanelPool {
             !liveDisplayIDs.contains($0)
         }
         for displayID in staleTimeoutIDs {
-            warmupTimeoutsByDisplayID.removeValue(forKey: displayID)?.cancel()
+            warmupTimeoutsByDisplayID.removeValue(forKey: displayID)?.invalidate()
         }
     }
 
@@ -195,7 +208,7 @@ final class OverlayPanelPool {
         warmingPanelsByDisplayID[displayID] = panel
         panel.orderFrontRegardless()
 
-        let timeout = DispatchWorkItem { [weak self, weak panel] in
+        let timeout = Timer(timeInterval: 5, repeats: false) { [weak self, weak panel] _ in
             guard let panel else { return }
             self?.finishWarmup(
                 panel: panel,
@@ -203,14 +216,14 @@ final class OverlayPanelPool {
             )
         }
         warmupTimeoutsByDisplayID[displayID] = timeout
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: timeout)
+        RunLoop.main.add(timeout, forMode: .common)
     }
 
     private func takeWarmingPanel(displayID: CGDirectDisplayID) -> OverlayPanel? {
         guard let panel = warmingPanelsByDisplayID.removeValue(forKey: displayID) else {
             return nil
         }
-        warmupTimeoutsByDisplayID.removeValue(forKey: displayID)?.cancel()
+        warmupTimeoutsByDisplayID.removeValue(forKey: displayID)?.invalidate()
         (panel.contentView as? OverlayWarmupView)?.cancelPresentationTracking()
         panel.contentView = nil
         return panel

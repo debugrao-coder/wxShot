@@ -7,6 +7,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var overlayController: OverlayWindowController?
     private var suspendedEditDraft: OverlayWindowController.SuspendedEditDraft?
     private var pendingReopenSettingsWorkItem: DispatchWorkItem?
+    private var captureSessionGeneration: Int = 0
+    private var hotkeyHealthTimer: Timer?
+    private var screenshotTriggerCallback: ((CaptureTriggerContext) -> Void)?
+    private var quickPinTriggerCallback: (() -> Void)?
+    private var fullScreenScreenshotTriggerCallback: (() -> Void)?
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
@@ -47,6 +52,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.applyHotkeyState()
             }
         }
+        for name in [NSApplication.didBecomeActiveNotification, NSWorkspace.didWakeNotification] {
+            let center: NotificationCenter = name == NSApplication.didBecomeActiveNotification
+                ? NotificationCenter.default
+                : NSWorkspace.shared.notificationCenter
+            center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                self?.recoverHotkeyRegistrationIfNeeded()
+            }
+        }
+        hotkeyHealthTimer = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
+            self?.recoverHotkeyRegistrationIfNeeded()
+        }
+        if let hotkeyHealthTimer {
+            RunLoop.main.add(hotkeyHealthTimer, forMode: .common)
+        }
         WeChatMonitor.shared.start()
         SurvivalReporter.shared.start()
         applyHotkeyState()
@@ -82,6 +101,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Registers the screenshot shortcut only while wxShot is supposed to own it (see `WeChatMonitor.shouldOwnShortcut`).
     private func applyHotkeyState() {
         let hotkeys = HotkeyManager.shared
+        screenshotTriggerCallback = { [weak self] context in
+            guard let self else {
+                context.finish(.ignored)
+                return
+            }
+            self.handleTrigger(fromShortcut: true, triggerContext: context)
+        }
+        quickPinTriggerCallback = { [weak self] in self?.handleQuickPinTrigger() }
+        fullScreenScreenshotTriggerCallback = { [weak self] in
+            self?.handleFullScreenScreenshotTrigger(fromShortcut: true)
+        }
         if hotkeys.isRecording {
             hotkeys.unregister()
             hotkeys.unregisterQuickPin()
@@ -90,29 +120,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         if WeChatMonitor.shared.shouldOwnShortcut() {
-            hotkeys.register { [weak self] context in
-                guard let self else {
-                    context.finish(.ignored)
-                    return
-                }
-                self.handleTrigger(fromShortcut: true, triggerContext: context)
+            if let callback = screenshotTriggerCallback {
+                _ = hotkeys.register(callback: callback)
             }
         } else {
             hotkeys.unregister()
         }
 
         if Defaults.hasCustomQuickPinHotkey {
-            hotkeys.registerQuickPin { [weak self] in self?.handleQuickPinTrigger() }
+            if let callback = quickPinTriggerCallback {
+                _ = hotkeys.registerQuickPin(callback: callback)
+            }
         } else {
             hotkeys.unregisterQuickPin()
         }
         if Defaults.hasCustomFullScreenScreenshotHotkey {
-            hotkeys.registerFullScreenScreenshot { [weak self] in
-                self?.handleFullScreenScreenshotTrigger(fromShortcut: true)
+            if let callback = fullScreenScreenshotTriggerCallback {
+                _ = hotkeys.registerFullScreenScreenshot(callback: callback)
             }
         } else {
             hotkeys.unregisterFullScreenScreenshot()
         }
+    }
+
+    private func recoverHotkeyRegistrationIfNeeded() {
+        let hotkeys = HotkeyManager.shared
+        guard !hotkeys.isRecording else { return }
+        let shouldOwnShortcut = WeChatMonitor.shared.shouldOwnShortcut()
+        let expectedScreenshotRegistration = shouldOwnShortcut && hotkeys.currentHotkey() != nil
+        let expectedQuickPinRegistration = Defaults.hasCustomQuickPinHotkey && hotkeys.currentQuickPinHotkey() != nil
+        let expectedFullScreenRegistration = Defaults.hasCustomFullScreenScreenshotHotkey
+            && hotkeys.currentFullScreenScreenshotHotkey() != nil
+        let needsRecovery = hotkeys.isScreenshotHotkeyRegistered != expectedScreenshotRegistration
+            || (expectedScreenshotRegistration && !hotkeys.isEventHandlerInstalled)
+            || hotkeys.isQuickPinHotkeyRegistered != expectedQuickPinRegistration
+            || hotkeys.isFullScreenScreenshotHotkeyRegistered != expectedFullScreenRegistration
+        guard needsRecovery else { return }
+        NSLog("wxShot hotkey health check: repairing registration")
+        applyHotkeyState()
     }
 
     // MARK: - Capture
@@ -125,8 +170,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             source: fromShortcut ? .keyboardShortcut : .programmatic
         )
         context.mark(.handleTrigger)
+        TextRecognitionPanel.dismissCurrent()
 
-        guard overlayController == nil else {
+        guard recoverStaleCaptureSessionIfNeeded() else {
             context.finish(.ignored)
             return
         }
@@ -151,12 +197,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Select a screen region and pin it immediately after capture.
     func handleQuickPinTrigger() {
-        guard overlayController == nil, AppPermissions.screenRecordingGranted else { return }
+        guard recoverStaleCaptureSessionIfNeeded(), AppPermissions.screenRecordingGranted else { return }
         startCapture(postCaptureAction: .quickPin)
     }
 
     func handleFullScreenScreenshotTrigger(fromShortcut: Bool = false) {
-        guard overlayController == nil else { return }
+        TextRecognitionPanel.dismissCurrent()
+        guard recoverStaleCaptureSessionIfNeeded() else { return }
         guard AppPermissions.screenRecordingGranted else {
             OnboardingWindowController.shared.show()
             return
@@ -164,6 +211,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let focusRestorer = SourceAppFocusRestorer.captureFrontmostApplication()
         let cursorPoint = NSEvent.mouseLocation
+        captureSessionGeneration += 1
+        let generation = captureSessionGeneration
         let screen = NSScreen.screens.first(where: { $0.frame.contains(cursorPoint) })
             ?? NSScreen.main
             ?? NSScreen.screens.first
@@ -174,8 +223,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 generatedImage: image,
                 source: .fullScreen,
                 onRequestFocusReturn: { focusRestorer.restore() },
-                onSuspend: { [weak self] draft in self?.handleEditSuspension(draft) },
-                onComplete: { [weak self] finalImage in self?.handleEditCompletion(finalImage) }
+                onSuspend: self.suspendedDraftHandler(for: generation),
+                onComplete: self.completionHandler(for: generation)
               )
         else {
             ToastWindow.show(message: L10n.fullScreenScreenshotFailed)
@@ -189,19 +238,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Re-opens the editor for an image that was pinned (the pin toolbar's edit button).
     @discardableResult
     func handlePinnedImageEditRequest(_ image: NSImage, beforePresent: () -> Void) -> Bool {
-        guard overlayController == nil else { return false }
+        guard recoverStaleCaptureSessionIfNeeded() else { return false }
         beforePresent()
+        let generation = captureSessionGeneration + 1
 
         guard let controller = ImageEditLauncher.launch(
             generatedImage: image,
             source: .pin,
             keepsEditorAcrossSpaces: Defaults.pinAcrossSpaces,
-            onSuspend: { [weak self] draft in self?.handleEditSuspension(draft) },
-            onComplete: { [weak self] finalImage in self?.handleEditCompletion(finalImage) }
+            onSuspend: suspendedDraftHandler(for: generation),
+            onComplete: completionHandler(for: generation)
         ) else {
             return false
         }
 
+        captureSessionGeneration = generation
         overlayController = controller
         applyHotkeyState()
         return true
@@ -214,24 +265,67 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     ) {
         let context = triggerContext ?? CaptureTriggerContext(source: .programmatic)
         context.mark(.startCapture)
-        guard overlayController == nil else {
+        guard recoverStaleCaptureSessionIfNeeded() else {
             context.finish(.ignored)
             return
         }
+        captureSessionGeneration += 1
+        let generation = captureSessionGeneration
         let focusRestorer = SourceAppFocusRestorer.captureFrontmostApplication()
         overlayController = OverlayWindowController(
             postCaptureAction: postCaptureAction,
             triggerContext: context,
             onFirstFramePresented: onFirstFramePresented,
             onRequestFocusReturn: { focusRestorer.restore() },
-            onSuspend: { [weak self] draft in self?.handleEditSuspension(draft) },
-            onComplete: { [weak self] finalImage in self?.handleEditCompletion(finalImage) }
+            onSuspend: suspendedDraftHandler(for: generation),
+            onComplete: completionHandler(for: generation)
         )
         overlayController?.activate()
         applyHotkeyState()
     }
 
-    private func handleEditCompletion(_ finalImage: NSImage?) {
+    private func completionHandler(for generation: Int) -> (NSImage?) -> Void {
+        { [weak self] finalImage in
+            self?.handleEditCompletion(finalImage, generation: generation)
+        }
+    }
+
+    private func suspendedDraftHandler(for generation: Int) -> (OverlayWindowController.SuspendedEditDraft) -> Void {
+        { [weak self] draft in
+            self?.handleEditSuspension(draft, generation: generation)
+        }
+    }
+
+    private func recoverStaleCaptureSessionIfNeeded() -> Bool {
+        guard let controller = overlayController else { return true }
+        let startedAt = controller.captureSessionStartedAt ?? .distantPast
+        let elapsed = Date().timeIntervalSince(startedAt)
+        let shouldRecover = CaptureSessionRecovery.shouldRecover(
+            sessionEnded: controller.isCaptureSessionEnded,
+            isOverlayPresented: controller.isOverlayPresented,
+            isWaitingForSnapshot: controller.isWaitingForSnapshot,
+            isWaitingForWindowCapture: controller.isWaitingForWindowCapture,
+            elapsed: elapsed
+        )
+        guard shouldRecover else { return false }
+        NSLog(
+            "wxShot capture recovery: stale session elapsed=%.1f ended=%d presented=%d",
+            elapsed,
+            controller.isCaptureSessionEnded ? 1 : 0,
+            controller.isOverlayPresented ? 1 : 0
+        )
+        captureSessionGeneration += 1
+        overlayController = nil
+        suspendedEditDraft = nil
+        controller.forceCancel()
+        TextRecognitionPanel.dismissCurrent()
+        OverlayWindowController.recyclePresentationSurfaces()
+        applyHotkeyState()
+        return true
+    }
+
+    private func handleEditCompletion(_ finalImage: NSImage?, generation: Int) {
+        guard generation == captureSessionGeneration else { return }
         if let finalImage = finalImage {
             SurvivalReporter.shared.count("capture")
             let quality = Defaults.screenshotClipboardQuality
@@ -255,7 +349,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         applyHotkeyState()
     }
 
-    private func handleEditSuspension(_ draft: OverlayWindowController.SuspendedEditDraft) {
+    private func handleEditSuspension(_ draft: OverlayWindowController.SuspendedEditDraft, generation: Int) {
+        guard generation == captureSessionGeneration else { return }
         suspendedEditDraft = draft
         overlayController = nil
         applyHotkeyState()
@@ -268,12 +363,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func resumeSuspendedEditIfAvailable() -> Bool {
         guard let draft = suspendedEditDraft else { return false }
+        captureSessionGeneration += 1
+        let generation = captureSessionGeneration
         let focusRestorer = SourceAppFocusRestorer.captureFrontmostApplication()
         let controller = OverlayWindowController(
             suspendedDraft: draft,
             onRequestFocusReturn: { focusRestorer.restore() },
-            onSuspend: { [weak self] draft in self?.handleEditSuspension(draft) },
-            onComplete: { [weak self] finalImage in self?.handleEditCompletion(finalImage) }
+            onSuspend: suspendedDraftHandler(for: generation),
+            onComplete: completionHandler(for: generation)
         )
         suspendedEditDraft = nil
         overlayController = controller
@@ -301,7 +398,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func scheduleSettingsOpenFromReopen() {
         pendingReopenSettingsWorkItem?.cancel()
         let workItem = DispatchWorkItem { [weak self] in
-            guard let self, self.overlayController == nil else { return }
+            guard let self, self.recoverStaleCaptureSessionIfNeeded() else { return }
             if OnboardingWindowController.shared.isVisible { return }
             self.openSettings()
         }

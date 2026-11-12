@@ -69,6 +69,10 @@ final class TextRecognitionPanel: NSPanel {
         panel.startRecognition()
     }
 
+    static func dismissCurrent() {
+        current?.close()
+    }
+
     private init(image: NSImage, anchorRect: NSRect, screen: NSScreen, translate: Bool) {
         screenshot = image
         translates = translate
